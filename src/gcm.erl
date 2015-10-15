@@ -65,8 +65,6 @@ code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
 
 %% Internal
-do_push(_, _, _, 0) ->
-    ok;
 
 do_push(RegIds, Message, Key, Retry) ->
     error_logger:info_msg("Sending message: ~p to reg ids: ~p retries: ~p.~n", [Message, RegIds, Retry]),
@@ -84,14 +82,17 @@ handle_result(GCMResult, RegIds) ->
     {_MulticastId, _SuccessesNumber, _FailuresNumber, _CanonicalIdsNumber, Results} = GCMResult,
     lists:map(fun({Result, RegId}) -> {RegId, parse(Result)} end, lists:zip(Results, RegIds)).
 
+%% No more retries left, abort.
+do_backoff(_RetryAfter, _RegIds, _Message, 0) ->
+    ok;
+%% No retry-after time received, abort.
+do_backoff(no_retry, _RegIds, _Message, _Retry) ->
+    ok;
 do_backoff(RetryAfter, RegIds, Message, Retry) ->
-    case RetryAfter of
-        no_retry ->
-            ok;
-        _ ->
-            error_logger:info_msg("Received retry-after. Will retry: ~p times~n", [Retry-1]),
-            timer:apply_after(RetryAfter * 1000, ?MODULE, push, [self(), RegIds, Message, Retry - 1])
-    end.
+    NextRetry = Retry - 1,
+    RetryAfterMilli = RetryAfter * 1000,
+    error_logger:info_msg("Received retry-after. Will retry: ~p times after ~p ms.~n", [NextRetry, RetryAfterMilli]),
+    timer:apply_after(RetryAfterMilli, ?MODULE, push, [self(), RegIds, Message, NextRetry]).
 
 parse(Result) ->
     case {
